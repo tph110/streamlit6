@@ -13,7 +13,7 @@ import requests
 from io import BytesIO
 import numpy as np
 import plotly.graph_objects as go
-import pandas as pd # <-- NEW: Used for model performance table
+import pandas as pd
 
 # -------------------------
 # Configuration
@@ -22,6 +22,10 @@ MODEL_URL = "https://huggingface.co/Skindoc/streamlit5/resolve/main/best_model_2
 MODEL_NAME = "tf_efficientnet_b4"
 NUM_CLASSES = 8
 IMG_SIZE = 384
+
+# Set a long timeout for model download (5 minutes = 300 seconds)
+# This is the critical change to prevent deployment timeouts on large files
+DOWNLOAD_TIMEOUT_SECONDS = 300 
 
 CLASS_NAMES = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'scc', 'vasc']
 
@@ -237,17 +241,17 @@ def set_theme(background_color='#0E1117'):
 
 
 # -------------------------
-# Model Loading (Unchanged for brevity)
+# Model Loading (Updated with Timeout and Robust Error Handling)
 # -------------------------
 @st.cache_resource
 def load_model():
-    """Load the trained model from HuggingFace"""
+    """Load the trained model from HuggingFace, with robust download."""
+    
     try:
-        # Download model weights
-        # ... [existing model loading logic] ...
-        with st.spinner("Downloading model (this may take a minute on first run)..."):
-            response = requests.get(MODEL_URL)
-            response.raise_for_status()
+        with st.spinner(f"Downloading model (up to {DOWNLOAD_TIMEOUT_SECONDS}s timeout)..."):
+            # Use requests.get with a timeout parameter
+            response = requests.get(MODEL_URL, timeout=DOWNLOAD_TIMEOUT_SECONDS)
+            response.raise_for_status() # Raises an exception for bad status codes (4xx or 5xx)
 
         # Load checkpoint
         checkpoint = torch.load(BytesIO(response.content), map_location='cpu')
@@ -267,17 +271,26 @@ def load_model():
             model.load_state_dict(checkpoint)
 
         model.eval()
-
+        st.success("Model loaded successfully!")
         return model
+    
+    except requests.exceptions.Timeout:
+        st.error(
+            f"Error: Model download timed out after {DOWNLOAD_TIMEOUT_SECONDS} seconds. "
+            "The model file is likely too large for the current network condition or the server is slow."
+        )
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error during model download. Check the MODEL_URL. Details: {e}")
+        return None
     except Exception as e:
         st.error(f"Error loading model: {e}")
         return None
 
 # -------------------------
-# Image Preprocessing & Prediction (Unchanged for brevity)
+# Image Preprocessing & Prediction
 # -------------------------
 def get_transform():
-    # ... [existing transform logic] ...
     return transforms.Compose([
         transforms.Resize(int(IMG_SIZE * 1.05)),
         transforms.CenterCrop(IMG_SIZE),
@@ -286,7 +299,6 @@ def get_transform():
     ])
 
 def preprocess_image(image: Image.Image) -> torch.Tensor:
-    # ... [existing preprocess logic] ...
     if image.mode != 'RGB':
         image = image.convert('RGB')
 
@@ -295,7 +307,6 @@ def preprocess_image(image: Image.Image) -> torch.Tensor:
     return tensor
 
 def predict_with_tta(model: torch.nn.Module, image_tensor: torch.Tensor, use_tta: bool = True) -> np.ndarray:
-    # ... [existing prediction logic] ...
     with torch.no_grad():
         if use_tta:
             probs_list = [
@@ -312,7 +323,7 @@ def predict_with_tta(model: torch.nn.Module, image_tensor: torch.Tensor, use_tta
 
 
 # -------------------------
-# Visualization Utilities (Minor adjustments for aesthetics)
+# Visualization Utilities
 # -------------------------
 def create_probability_chart(probabilities: np.ndarray, class_names: list) -> go.Figure:
     """Create an interactive bar chart of probabilities."""
@@ -495,7 +506,7 @@ def main():
     model = load_model()
 
     if model is None:
-        st.error("Failed to load model. Please refresh the page.")
+        # If model loading failed, stop execution here
         return
 
     # Main content: Use tabs for organized presentation

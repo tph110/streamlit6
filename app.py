@@ -13,7 +13,7 @@ import requests
 from io import BytesIO
 import numpy as np
 import plotly.graph_objects as go
-import pandas as pd
+import pandas as pd # <-- NEW: Used for model performance table
 
 # -------------------------
 # Configuration
@@ -22,10 +22,6 @@ MODEL_URL = "https://huggingface.co/Skindoc/streamlit5/resolve/main/best_model_2
 MODEL_NAME = "tf_efficientnet_b4"
 NUM_CLASSES = 8
 IMG_SIZE = 384
-
-# Set a long timeout for model download (5 minutes = 300 seconds)
-# This is the critical change to prevent deployment timeouts on large files
-DOWNLOAD_TIMEOUT_SECONDS = 300 
 
 CLASS_NAMES = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'scc', 'vasc']
 
@@ -241,17 +237,15 @@ def set_theme(background_color='#0E1117'):
 
 
 # -------------------------
-# Model Loading (Updated with Timeout and Robust Error Handling)
+# Model Loading (Unchanged for brevity)
 # -------------------------
 @st.cache_resource
 def load_model():
-    """Load the trained model from HuggingFace, with robust download."""
-    
+    """Load the trained model from HuggingFace"""
     try:
-        with st.spinner(f"Downloading model (up to {DOWNLOAD_TIMEOUT_SECONDS}s timeout)..."):
-            # Use requests.get with a timeout parameter
-            response = requests.get(MODEL_URL, timeout=DOWNLOAD_TIMEOUT_SECONDS)
-            response.raise_for_status() # Raises an exception for bad status codes (4xx or 5xx)
+        # Download model weights with timeout
+        response = requests.get(MODEL_URL, timeout=(10, 300))  # 10s connect, 300s read timeout
+        response.raise_for_status()
 
         # Load checkpoint
         checkpoint = torch.load(BytesIO(response.content), map_location='cpu')
@@ -271,26 +265,21 @@ def load_model():
             model.load_state_dict(checkpoint)
 
         model.eval()
-        st.success("Model loaded successfully!")
+
         return model
-    
     except requests.exceptions.Timeout:
-        st.error(
-            f"Error: Model download timed out after {DOWNLOAD_TIMEOUT_SECONDS} seconds. "
-            "The model file is likely too large for the current network condition or the server is slow."
-        )
-        return None
+        # Return error info as tuple - can't use st.error() in cached function
+        return ("timeout", "Model download timed out. Please check your internet connection and try again.")
     except requests.exceptions.RequestException as e:
-        st.error(f"Error during model download. Check the MODEL_URL. Details: {e}")
-        return None
+        return ("download_error", f"Error downloading model: {str(e)}")
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        return None
+        return ("error", f"Error loading model: {str(e)}")
 
 # -------------------------
-# Image Preprocessing & Prediction
+# Image Preprocessing & Prediction (Unchanged for brevity)
 # -------------------------
 def get_transform():
+    # ... [existing transform logic] ...
     return transforms.Compose([
         transforms.Resize(int(IMG_SIZE * 1.05)),
         transforms.CenterCrop(IMG_SIZE),
@@ -299,6 +288,7 @@ def get_transform():
     ])
 
 def preprocess_image(image: Image.Image) -> torch.Tensor:
+    # ... [existing preprocess logic] ...
     if image.mode != 'RGB':
         image = image.convert('RGB')
 
@@ -307,6 +297,7 @@ def preprocess_image(image: Image.Image) -> torch.Tensor:
     return tensor
 
 def predict_with_tta(model: torch.nn.Module, image_tensor: torch.Tensor, use_tta: bool = True) -> np.ndarray:
+    # ... [existing prediction logic] ...
     with torch.no_grad():
         if use_tta:
             probs_list = [
@@ -323,7 +314,7 @@ def predict_with_tta(model: torch.nn.Module, image_tensor: torch.Tensor, use_tta
 
 
 # -------------------------
-# Visualization Utilities
+# Visualization Utilities (Minor adjustments for aesthetics)
 # -------------------------
 def create_probability_chart(probabilities: np.ndarray, class_names: list) -> go.Figure:
     """Create an interactive bar chart of probabilities."""
@@ -427,33 +418,37 @@ def main():
     )
     st.markdown("<hr style='margin: 0.5rem 0 2rem 0;'>", unsafe_allow_html=True)
 
+    # Initialize session state for model if not exists
+    if 'model_loaded' not in st.session_state:
+        st.session_state.model_loaded = False
+    if 'model' not in st.session_state:
+        st.session_state.model = None
+
     # --- SIDEBAR (Professional layout with logo) ---
     with st.sidebar:
         # Logo at the top of sidebar
-        try:
-            logo_path = "logo.png"  # Try common logo file names
-            logo = Image.open(logo_path)
-            st.markdown('<div class="logo-container">', unsafe_allow_html=True)
-            st.image(logo, use_column_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        except FileNotFoundError:
-            # Try alternative logo file names
+        logo_loaded = False
+        for logo_filename in ["logo.png", "logo.jpg", "logo.jpeg"]:
             try:
-                logo_path = "logo.jpg"
-                logo = Image.open(logo_path)
+                logo = Image.open(logo_filename)
                 st.markdown('<div class="logo-container">', unsafe_allow_html=True)
                 st.image(logo, use_column_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-            except FileNotFoundError:
-                # If no logo found, show a placeholder message
-                st.markdown(
-                    """
-                    <div style="text-align: center; padding: 1rem 0; border-bottom: 2px solid rgba(78, 205, 196, 0.3);">
-                        <p style="color: #4ECDC4; font-weight: 600; font-size: 1.2rem;">Skin Scanner AI</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
+                logo_loaded = True
+                break
+            except (FileNotFoundError, IOError, OSError):
+                continue
+        
+        if not logo_loaded:
+            # If no logo found, show a placeholder message
+            st.markdown(
+                """
+                <div style="text-align: center; padding: 1rem 0; border-bottom: 2px solid rgba(78, 205, 196, 0.3);">
+                    <p style="color: #4ECDC4; font-weight: 600; font-size: 1.2rem;">Skin Scanner AI</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         
         st.markdown("<br>", unsafe_allow_html=True)
         st.header("⚙️ App Controls")
@@ -502,12 +497,30 @@ def main():
             unsafe_allow_html=True
         )
 
-    # Load model
-    model = load_model()
+    # Load model (cached, so only downloads once)
+    if not st.session_state.model_loaded:
+        with st.spinner("🔄 Loading AI model (this may take a minute on first run)..."):
+            result = load_model()
+            # Handle error tuples from load_model
+            if isinstance(result, tuple):
+                error_type, error_msg = result
+                st.error(f"❌ {error_msg}")
+                if error_type == "timeout":
+                    st.info("💡 The model download timed out. Please check your internet connection and try refreshing the page.")
+                else:
+                    st.info("💡 Please try refreshing the page. If the problem persists, check your internet connection.")
+                st.stop()
+                model = None
+            else:
+                model = result
+            st.session_state.model = model
+            st.session_state.model_loaded = True
+    else:
+        model = st.session_state.model
 
     if model is None:
-        # If model loading failed, stop execution here
-        return
+        st.error("❌ Failed to load model. Please refresh the page.")
+        st.stop()
 
     # Main content: Use tabs for organized presentation
     tab_upload, tab_info = st.tabs(["🚀 Classification Tool", "📚 Lesion Info"])

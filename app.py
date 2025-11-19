@@ -27,7 +27,7 @@ CLASS_NAMES = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'scc', 'vasc']
 
 CLASS_INFO = {
     'akiec': {
-        'full_name': 'Actinic Keratoses',
+        'full_name': 'Actinic Keratoses',
         'description': 'Pre-cancerous lesions caused by sun damage. Requires monitoring and treatment.',
         'risk': 'Medium',
         'color': '#FFA500'  # Orange
